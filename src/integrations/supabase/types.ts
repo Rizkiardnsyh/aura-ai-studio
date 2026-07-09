@@ -68,6 +68,30 @@ export type Database = {
         }
         Relationships: []
       }
+      voice_history: {
+        Row: {
+          created_at: string
+          generated_image_url: string
+          id: string
+          user_id: string
+          voice_text: string
+        }
+        Insert: {
+          created_at?: string
+          generated_image_url: string
+          id?: string
+          user_id: string
+          voice_text: string
+        }
+        Update: {
+          created_at?: string
+          generated_image_url?: string
+          id?: string
+          user_id?: string
+          voice_text?: string
+        }
+        Relationships: []
+      }
       voice_sessions: {
         Row: {
           answer: string

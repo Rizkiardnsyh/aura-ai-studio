@@ -1,49 +1,70 @@
-import { chatWithAi } from "@/lib/ai.functions";
+import { generateImageFromVoice } from "@/lib/ai.functions";
 
-export async function transcribeAudio(blob: Blob): Promise<string> {
-  const fd = new FormData();
-  fd.append("file", blob, "recording.webm");
-  const res = await fetch("/api/transcribe", { method: "POST", body: fd });
-  if (!res.ok) throw new Error(`Transcription failed: ${await res.text()}`);
-  const json = (await res.json()) as { text?: string };
-  return json.text ?? "";
+export async function generateFromVoicePrompt(voice_text: string) {
+  return await generateImageFromVoice({ data: { voice_text } });
 }
 
-export async function askAssistant(question: string) {
-  return await chatWithAi({ data: { question } });
+type SpeechRecognitionResultLike = {
+  isFinal: boolean;
+  0: { transcript: string };
+};
+type SpeechRecognitionEventLike = {
+  resultIndex: number;
+  results: ArrayLike<SpeechRecognitionResultLike>;
+};
+type SpeechRecognitionLike = {
+  lang: string;
+  continuous: boolean;
+  interimResults: boolean;
+  onresult: ((e: SpeechRecognitionEventLike) => void) | null;
+  onerror: ((e: { error: string }) => void) | null;
+  onend: (() => void) | null;
+  start: () => void;
+  stop: () => void;
+};
+
+export function isSpeechRecognitionSupported(): boolean {
+  if (typeof window === "undefined") return false;
+  return !!(
+    (window as unknown as { SpeechRecognition?: unknown }).SpeechRecognition ||
+    (window as unknown as { webkitSpeechRecognition?: unknown }).webkitSpeechRecognition
+  );
 }
 
-export async function synthesizeSpeech(text: string): Promise<string> {
-  const res = await fetch("/api/tts", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text }),
-  });
-  if (!res.ok) throw new Error(`TTS failed: ${await res.text()}`);
-  const buf = await res.arrayBuffer();
-  const blob = new Blob([buf], { type: "audio/mpeg" });
-  return URL.createObjectURL(blob);
-}
+export type LiveTranscriber = {
+  stop: () => void;
+};
 
-/** Record microphone until stop() is called. */
-export function startRecording(): Promise<{ stop: () => Promise<Blob> }> {
-  return new Promise(async (resolve, reject) => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mime = MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "";
-      const recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
-      const chunks: BlobPart[] = [];
-      recorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
-      const stopPromise = new Promise<Blob>((res) => {
-        recorder.onstop = () => {
-          stream.getTracks().forEach((t) => t.stop());
-          res(new Blob(chunks, { type: recorder.mimeType || "audio/webm" }));
-        };
-      });
-      recorder.start();
-      resolve({ stop: async () => { recorder.stop(); return stopPromise; } });
-    } catch (e) {
-      reject(e);
+export function startLiveTranscription(
+  onUpdate: (finalText: string, interim: string) => void,
+  onError: (msg: string) => void,
+  lang = "en-US",
+): LiveTranscriber | null {
+  const Ctor =
+    (window as unknown as { SpeechRecognition?: new () => SpeechRecognitionLike }).SpeechRecognition ||
+    (window as unknown as { webkitSpeechRecognition?: new () => SpeechRecognitionLike }).webkitSpeechRecognition;
+  if (!Ctor) return null;
+  const rec = new Ctor();
+  rec.lang = lang;
+  rec.continuous = true;
+  rec.interimResults = true;
+  let finalText = "";
+  rec.onresult = (e) => {
+    let interim = "";
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const r = e.results[i];
+      if (r.isFinal) finalText += r[0].transcript + " ";
+      else interim += r[0].transcript;
     }
-  });
+    onUpdate(finalText.trim(), interim);
+  };
+  rec.onerror = (e) => onError(e.error || "recognition error");
+  rec.onend = () => {};
+  try {
+    rec.start();
+  } catch (e) {
+    onError((e as Error).message);
+    return null;
+  }
+  return { stop: () => { try { rec.stop(); } catch { /* ignore */ } } };
 }

@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState, useCallback } from "react";
-import { Trash2, ImageIcon, Mic, Eye } from "lucide-react";
+import { Trash2, ImageIcon, Mic, Eye, Download } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -14,20 +14,20 @@ export const Route = createFileRoute("/_authenticated/history")({
 });
 
 type Img = { id: string; prompt: string; style: string | null; image_url: string; created_at: string };
-type Voice = { id: string; question: string; answer: string; created_at: string };
+type VoiceHist = { id: string; voice_text: string; generated_image_url: string; created_at: string };
 
 function HistoryPage() {
   const [imgs, setImgs] = useState<Img[]>([]);
-  const [voices, setVoices] = useState<Voice[]>([]);
-  const [view, setView] = useState<Img | null>(null);
+  const [voices, setVoices] = useState<VoiceHist[]>([]);
+  const [view, setView] = useState<{ url: string; caption: string } | null>(null);
 
   const load = useCallback(async () => {
     const [{ data: i }, { data: v }] = await Promise.all([
       supabase.from("image_generations").select("*").order("created_at", { ascending: false }),
-      supabase.from("voice_sessions").select("*").order("created_at", { ascending: false }),
+      supabase.from("voice_history").select("*").order("created_at", { ascending: false }),
     ]);
     setImgs((i ?? []) as Img[]);
-    setVoices((v ?? []) as Voice[]);
+    setVoices((v ?? []) as VoiceHist[]);
   }, []);
 
   useEffect(() => { load(); }, [load]);
@@ -39,10 +39,17 @@ function HistoryPage() {
     toast.success("Deleted");
   }
   async function delVoice(id: string) {
-    const { error } = await supabase.from("voice_sessions").delete().eq("id", id);
+    const { error } = await supabase.from("voice_history").delete().eq("id", id);
     if (error) return toast.error("Delete failed");
     setVoices((s) => s.filter((r) => r.id !== id));
     toast.success("Deleted");
+  }
+
+  function download(url: string, name: string) {
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name;
+    a.click();
   }
 
   return (
@@ -72,8 +79,11 @@ function HistoryPage() {
                       <span>{new Date(r.created_at).toLocaleDateString()}</span>
                     </div>
                     <div className="flex gap-2 pt-1">
-                      <Button size="sm" variant="outline" className="flex-1" onClick={() => setView(r)}>
+                      <Button size="sm" variant="outline" className="flex-1" onClick={() => setView({ url: r.image_url, caption: r.prompt })}>
                         <Eye className="w-3.5 h-3.5 mr-1" /> View
+                      </Button>
+                      <Button size="sm" variant="ghost" onClick={() => download(r.image_url, `image-${r.id}.png`)}>
+                        <Download className="w-3.5 h-3.5" />
                       </Button>
                       <Button size="sm" variant="ghost" onClick={() => delImg(r.id)}>
                         <Trash2 className="w-3.5 h-3.5 text-destructive" />
@@ -88,26 +98,31 @@ function HistoryPage() {
 
         <TabsContent value="voice" className="mt-6">
           {voices.length === 0 ? (
-            <EmptyState label="No voice sessions yet" />
+            <EmptyState label="No voice generations yet" />
           ) : (
-            <div className="space-y-3">
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
               {voices.map((r) => (
-                <Card key={r.id} className="p-4">
-                  <div className="flex items-start justify-between gap-4">
-                    <div className="flex-1 min-w-0 space-y-2">
-                      <div>
-                        <div className="text-[11px] uppercase tracking-wider text-muted-foreground">You asked</div>
-                        <div className="text-sm font-medium">{r.question}</div>
-                      </div>
-                      <div>
-                        <div className="text-[11px] uppercase tracking-wider text-muted-foreground">AI replied</div>
-                        <div className="text-sm text-muted-foreground">{r.answer}</div>
-                      </div>
-                      <div className="text-xs text-muted-foreground">{new Date(r.created_at).toLocaleString()}</div>
+                <Card key={r.id} className="overflow-hidden group">
+                  <div className="aspect-square bg-muted overflow-hidden">
+                    <img src={r.generated_image_url} alt={r.voice_text} className="w-full h-full object-cover group-hover:scale-105 transition-transform" />
+                  </div>
+                  <div className="p-4 space-y-2">
+                    <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
+                      <Mic className="w-3 h-3" /> Voice prompt
                     </div>
-                    <Button size="sm" variant="ghost" onClick={() => delVoice(r.id)}>
-                      <Trash2 className="w-4 h-4 text-destructive" />
-                    </Button>
+                    <div className="text-sm font-medium line-clamp-2">{r.voice_text}</div>
+                    <div className="text-xs text-muted-foreground">{new Date(r.created_at).toLocaleDateString()}</div>
+                    <div className="flex gap-2 pt-1">
+                      <Button size="sm" variant="outline" className="flex-1" onClick={() => setView({ url: r.generated_image_url, caption: r.voice_text })}>
+                        <Eye className="w-3.5 h-3.5 mr-1" /> View
+                      </Button>
+                      <Button size="sm" variant="ghost" onClick={() => download(r.generated_image_url, `voice-${r.id}.png`)}>
+                        <Download className="w-3.5 h-3.5" />
+                      </Button>
+                      <Button size="sm" variant="ghost" onClick={() => delVoice(r.id)}>
+                        <Trash2 className="w-3.5 h-3.5 text-destructive" />
+                      </Button>
+                    </div>
                   </div>
                 </Card>
               ))}
@@ -118,8 +133,8 @@ function HistoryPage() {
 
       <Dialog open={!!view} onOpenChange={(o) => !o && setView(null)}>
         <DialogContent className="max-w-2xl">
-          <DialogHeader><DialogTitle>{view?.prompt}</DialogTitle></DialogHeader>
-          {view && <img src={view.image_url} alt={view.prompt} className="w-full rounded-lg" />}
+          <DialogHeader><DialogTitle>{view?.caption}</DialogTitle></DialogHeader>
+          {view && <img src={view.url} alt={view.caption} className="w-full rounded-lg" />}
         </DialogContent>
       </Dialog>
     </div>
